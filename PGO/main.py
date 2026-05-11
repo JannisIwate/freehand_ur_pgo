@@ -27,13 +27,16 @@ acc_transforms_gt = acc_transforms_gt[1:-1]
 graph_estimated, initial_estimated, optimized_estimated = build_graph(inbetween_transforms_pred, acc_transforms_pred, True)
 graph_gt, initial_gt, _ = build_graph(inbetween_transforms_gt, acc_transforms_gt, False)
 
-# plot
-plot_trajectories([
-    extract_positions(acc_transforms_pred),
-    extract_positions(acc_transforms_gt)
-    ],
-    labels=["Initial estimated", "GT"],
-    colors=["blue", "red"])
+# plot marginals
+plot_marginals(graph_estimated, optimized_estimated, 1, 10)
+
+# plot trajectories
+# plot_trajectories([
+#     extract_positions(acc_transforms_pred),
+#     extract_positions(acc_transforms_gt)
+#     ],
+#     labels=["Initial estimated", "GT"],
+#     colors=["blue", "red"])
 
 # error metrics
 ge_error = graph_estimated.error(initial_estimated)

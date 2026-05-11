@@ -2,6 +2,7 @@ import numpy as np
 import gtsam
 import matplotlib.pyplot as plt
 from gtsam import NonlinearFactorGraph, Values, noiseModel
+import gtsam.utils.plot as gtsam_plot
 from graph.utils import *
 
 
@@ -38,8 +39,13 @@ def build_graph(abs_poses, rel_poses, optimize = True):
     initial = Values()
 
     # gaussian noise models (tune these!)
-    prior_noise = noiseModel.Diagonal.Sigmas(np.array([1e-6]*6)) # small value to anchor first pose (equals in large penalty regarding error function, first pose shall be fixed)
-    odom_noise  = noiseModel.Diagonal.Sigmas(np.array([0.05]*6)) # larger value vice versa
+    prior_noise = noiseModel.Diagonal.Sigmas(
+        np.array([1e-4]*6)
+    )
+
+    odom_noise = noiseModel.Diagonal.Sigmas(
+        np.array([1e-6]*6)
+    )
 
     # Insert nodes (absolute poses)
     for i in range(N):
@@ -78,6 +84,22 @@ def build_graph(abs_poses, rel_poses, optimize = True):
         optimized = optimizer.optimize()
 
     return graph, initial, optimized
+
+def plot_marginals(graph, optimized, step_size=1, n_values=None):
+
+    if n_values is None:
+        n_values = optimized.size()
+
+    if n_values > optimized.size():
+        raise ValueError(f"n_values must be less than or equal to the number of poses!")
+
+    marginals = gtsam.Marginals(graph, optimized)
+
+    for i in range(0, n_values, step_size):
+        print(f"Pose {i} covariance:\n{marginals.marginalCovariance(i)}\n")
+    for i in range(0, n_values, step_size):
+        gtsam_plot.plot_pose3(0, optimized.atPose3(i), 0.5, marginals.marginalCovariance(i))
+    plt.show()
 
 def plot_trajectories(trajectories, labels=None, colors=None):
 
