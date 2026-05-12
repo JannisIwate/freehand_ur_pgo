@@ -2,6 +2,7 @@
 /freehand_adapted/results/
 /freehand_adapted/data/Freehand_US_data/
 /freehand_adapted/data/Freehand_US_data.zip
+/documents/presentations/presentation_images/
 *.txt
 calib_matrix.csv
 
