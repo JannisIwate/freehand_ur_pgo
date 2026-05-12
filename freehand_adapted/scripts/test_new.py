@@ -1,10 +1,10 @@
-
 import os
 from matplotlib import pyplot as plt
 from numpy import matmul
 import torch
 from torchvision.models import efficientnet_b1
 import sys
+import h5py
 
 sys.path.append(os.getcwd())
 
@@ -13,11 +13,13 @@ from freehand.loader import SSFrameDataset
 from freehand.network import build_model
 from data.calib import read_calib_matrices
 from freehand.transform import LabelTransform, TransformAccumulation, PredictionTransform
+from freehand.data_formatting import store_as_h5
 from freehand.utils import *
 
 print(torch.version.cuda)
 print(torch.cuda.get_arch_list())
-# GPU Configuration
+
+## GPU Configuration
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
     
 # Check CUDA availability
@@ -34,11 +36,14 @@ else:
     
 print(f"Using device: {device}\n")
 
+## algorithm parameters
 RESAMPLE_FACTOR = 4
 FILENAME_CALIB = "data/calib_matrix.csv"
 FILENAME_FRAMES = os.path.join(os.getcwd(), "data/Freehand_US_data", 'frames_res{}'.format(RESAMPLE_FACTOR)+".h5")
 
-## algorithm parameters
+OUTPUT_SCAN_H5_DIR = os.path.join(os.getcwd(), "../", "data", "freehand_us", "scan_h5_files")
+os.makedirs(OUTPUT_SCAN_H5_DIR, exist_ok=True)
+
 PRED_TYPE = "parameter"  # {"transform", "parameter", "point"}
 LABEL_TYPE = "point"  # {"point", "parameter"}
 NUM_SAMPLES = 10
@@ -49,13 +54,7 @@ LEARNING_RATE = 1e-4
 saved_results = 'seq_len' + str(NUM_SAMPLES) + '__' + 'lr' + str(LEARNING_RATE)\
         + '__pred_type_'+str(PRED_TYPE) + '__label_type_'+str(LABEL_TYPE) 
 SAVE_PATH = os.path.join('results', saved_results)
-if not os.path.exists(os.path.join(os.getcwd(),SAVE_PATH,'plotting')):
-    os.makedirs(os.path.join(os.getcwd(),SAVE_PATH,'plotting'))
-if not os.path.exists(os.path.join(os.getcwd(),SAVE_PATH,'pose_data')):
-    os.makedirs(os.path.join(os.getcwd(),SAVE_PATH,'pose_data'))
-if not os.path.exists(os.path.join(os.getcwd(),SAVE_PATH,'features')):
-    os.makedirs(os.path.join(os.getcwd(),SAVE_PATH,'features'))
-FILENAME_TEST = "fold_04.json"
+FILENAME_TEST = "fold_04.json" # only test data for now
 FILENAME_WEIGHTS = "best_validation_dist_model"
 
 ## create the validation/test set loader
@@ -115,12 +114,12 @@ for i_scan in range(len(dset_test)):
     frames, tforms, tforms_inv = (torch.tensor(t).to(device) for t in [frames,tforms,tforms_inv])
     
     # prepare predictions and data pairs for transformation
-    points_pred = torch.zeros((frames.shape[0],3,frame_points.shape[-1]), device=device)
+    coords_pred = torch.zeros((frames.shape[0],3,frame_points.shape[-1]), device=device)
     inbetween_transforms_pred = torch.zeros((frames.shape[0],4,4), device=device)
     inbetween_transforms_gt = torch.zeros((frames.shape[0],4,4), device=device)
     acc_transforms_pred = torch.zeros((frames.shape[0],4,4), device=device)
     acc_transforms_gt = torch.zeros((frames.shape[0],4,4), device=device)
-    point_features = [] # store as list as feature dimension is not determined
+    fvs = [] # store as list as feature dimension is not determined
 
     data_pairs_all = data_pairs_cal_label(frames.shape[0])
     transform_label = LabelTransform(
@@ -131,7 +130,7 @@ for i_scan in range(len(dset_test)):
             )
     
     # prepare GT labels
-    labels_allpts = torch.squeeze(transform_label(tforms[None,...], tforms_inv[None,...]))
+    coords_gt = torch.squeeze(transform_label(tforms[None,...], tforms_inv[None,...]))
     
     idx_f0 = START_FRAME_INDEX # this is the reference starting frame for network prediction 
     idx_p0 = idx_f0 + data_pairs[PAIR_INDEX][0] # this is the reference frame for transforming others to
@@ -141,17 +140,17 @@ for i_scan in range(len(dset_test)):
 
     tform_1to0_pred = torch.eye(4, device=device)
     tform_1to0_gt = torch.eye(4, device=device)
-    points_pred[idx_f0+1] = labels_allpts[0] # labels start with non-zero values I think
+    coords_pred[idx_f0+1] = coords_gt[0] # labels start with non-zero values I think
 
     while 1:
         frames_test = frames[idx_f0:idx_f0+NUM_SAMPLES,...]
         frames_test = frames_test/255
         outputs_test, features_test = model(frames_test.unsqueeze(0))
-        point_features.append(features_test)
+        fvs.append(features_test)
 
         tform_2to1_pred = transform_prediction(outputs_test)[0,PAIR_INDEX]
         preds_val, tform_1to0_pred = accumulate_prediction(tform_1to0_pred, tform_2to1_pred)
-        points_pred[idx_f0+1] = preds_val
+        coords_pred[idx_f0+1] = preds_val
 
         inbetween_transforms_pred[idx_f0+1] = tform_2to1_pred
         tform_2to1_gt = tforms_inv[idx_f0] @ tforms[idx_f0+1]
@@ -163,35 +162,48 @@ for i_scan in range(len(dset_test)):
         
         idx_f0 += interval_pred
         idx_p1 += interval_pred
-        break
+        
         if (idx_f0+NUM_SAMPLES) > frames.shape[0]:
             break
+
     if NUM_SAMPLES > 2:
-        points_pred[idx_f0:,...] = points_pred[idx_f0-1].expand(points_pred[idx_f0:,...].shape[0],-1,-1)
-        point_features.extend([point_features[idx_f0 - 1]] * (points_pred.shape[0] - len(point_features)))
+        coords_pred[idx_f0:,...] = coords_pred[idx_f0-1].expand(coords_pred[idx_f0:,...].shape[0],-1,-1)
+        fvs.extend([fvs[idx_f0 - 1]] * (coords_pred.shape[0] - len(fvs)))
         inbetween_transforms_pred[idx_f0:,...] = inbetween_transforms_pred[idx_f0-1].expand(inbetween_transforms_pred[idx_f0:,...].shape[0],-1,-1)
         inbetween_transforms_gt[idx_f0:,...] = inbetween_transforms_gt[idx_f0-1].expand(inbetween_transforms_gt[idx_f0:,...].shape[0],-1,-1)
         acc_transforms_pred[idx_f0:,...] = acc_transforms_pred[idx_f0-1].expand(acc_transforms_pred[idx_f0:,...].shape[0],-1,-1)
         acc_transforms_gt[idx_f0:,...] = acc_transforms_gt[idx_f0-1].expand(acc_transforms_gt[idx_f0:,...].shape[0],-1,-1)
 
     # plot trajectory
-    scan_plot_gt_pred(
-        labels_allpts.detach().cpu().numpy(),
-        points_pred.detach().cpu().numpy(),
-        SAVE_PATH +'/'+'plotting'+'/' + str(i_scan),
-        color='g',
-        width=4,
-        scatter=8,
-        legend_size=50,
-        legend='GT'
-    )    
+    # scan_plot_gt_pred(
+    #     coords_gt.detach().cpu().numpy(),
+    #     coords_pred.detach().cpu().numpy(),
+    #     SAVE_PATH +'/'+'plotting'+'/' + str(i_scan),
+    #     color='g',
+    #     width=4,
+    #     scatter=8,
+    #     legend_size=50,
+    #     legend='GT'
+    # )
+
+    # save to h5 file
+    scan_h5_path = os.path.join(
+        OUTPUT_SCAN_H5_DIR,
+        f"scan_{i_scan:04d}.h5"
+    )
+
+    store_as_h5(
+        frames=frames.detach().cpu().numpy(),
+        fvs=torch.stack(fvs, dim=0).detach().cpu().numpy(),
+        tforms=tforms.detach().cpu().numpy(),
+        tforms_inv=tforms_inv.detach().cpu().numpy(),
+        acc_transforms_gt=acc_transforms_gt.detach().cpu().numpy(),
+        inbetween_transforms_gt=inbetween_transforms_gt.detach().cpu().numpy(),
+        coords_gt=coords_gt.detach().cpu().numpy(),
+        acc_transforms_pred=acc_transforms_pred.detach().cpu().numpy(),
+        inbetween_transforms_pred=inbetween_transforms_pred.detach().cpu().numpy(),
+        coords_pred=coords_pred.detach().cpu().numpy(),
+        scan_h5_path=scan_h5_path
+    )
 
     break
-# save collected data
-torch.save(points_pred.detach().cpu(), os.path.join(SAVE_PATH +'/'+'pose_data', 'points_pred.pt'))
-torch.save(labels_allpts.detach().cpu(), os.path.join(SAVE_PATH +'/'+'pose_data', 'labels_allpts.pt'))
-torch.save(inbetween_transforms_pred.detach().cpu(), os.path.join(SAVE_PATH +'/'+'pose_data', 'inbetween_transforms_pred.pt'))
-torch.save(inbetween_transforms_gt.detach().cpu(), os.path.join(SAVE_PATH +'/'+'pose_data', 'inbetween_transforms_gt.pt'))
-torch.save(acc_transforms_pred.detach().cpu(), os.path.join(SAVE_PATH +'/'+'pose_data', 'acc_transforms_pred.pt'))
-torch.save(acc_transforms_gt.detach().cpu(), os.path.join(SAVE_PATH +'/'+'pose_data', 'acc_transforms_gt.pt'))
-torch.save(torch.stack(point_features, dim=0), os.path.join(SAVE_PATH +'/'+'features','point_features.pt'))

@@ -39,12 +39,12 @@ def build_graph(abs_poses, rel_poses, optimize = True):
     initial = Values()
 
     # gaussian noise models (tune these!)
-    prior_noise = noiseModel.Diagonal.Sigmas(
-        np.array([1e-4]*6)
+    prior_noise = noiseModel.Diagonal.Sigmas( # small sigma equals big weight -> high impact on cost function
+        np.array([1e-5]*6)
     )
 
     odom_noise = noiseModel.Diagonal.Sigmas(
-        np.array([1e-6]*6)
+        np.array([1e-2]*6)
     )
 
     # Insert nodes (absolute poses)
