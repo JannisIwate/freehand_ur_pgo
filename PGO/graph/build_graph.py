@@ -6,28 +6,29 @@ import gtsam.utils.plot as gtsam_plot
 from graph.utils import *
 
 
-def extract_positions(values):
-    # xs, ys, zs = [], [], []
-    # for i in range(values.size()):
-    #     p = values.atPose3(i).translation()
+def extract_positions(values, pose_type="torch_tensor"):
 
-    #     # works for both numpy and Point3
-    #     if isinstance(p, np.ndarray):
-    #         x, y, z = p
-    #     else:
-    #         x, y, z = p.x(), p.y(), p.z()
-
-    #     xs.append(x)
-    #     ys.append(y)
-    #     zs.append(z)
-
-    # return np.array(xs), np.array(ys), np.array(zs)
     xs, ys, zs = [], [], []
 
-    for el in values:
-        xs.append(el[0, 3])
-        ys.append(el[1, 3])
-        zs.append(el[2, 3])
+    if pose_type == "torch_tensor":
+
+        for el in values:
+
+            xs.append(el[0, 3])
+            ys.append(el[1, 3])
+            zs.append(el[2, 3])
+    elif pose_type == "gtsam_values":
+
+        for el in sorted(values.keys()):
+
+            p = values.atPose3(el).translation()
+            x, y, z = p[0], p[1], p[2]
+            
+            xs.append(x)
+            ys.append(y)
+            zs.append(z)
+    else:
+        raise ValueError(f"Invalid pose_type: {pose_type}")
     return np.array(xs), np.array(ys), np.array(zs)
 
 
